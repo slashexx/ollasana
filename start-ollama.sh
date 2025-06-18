@@ -24,15 +24,45 @@ mkdir -p "$OLLAMA_HOME"
 echo "=== Ollama Model Server Configuration ==="
 echo "Model: $MODEL_NAME"
 echo "Served Model Name: $SERVED_MODEL_NAME"
-echo "API Port: ${PORT:-9000}"
-echo "Ollama Port: $OLLAMA_PORT"
+echo "Unified API Port: ${PORT:-9000}"
+echo "Internal Ollama Port: $OLLAMA_PORT (not exposed)"
 echo "Models Directory: $OLLAMA_MODELS"
 echo "========================================="
 
+# Function to detect and configure GPU
+detect_gpu() {
+  echo "=== GPU Detection ==="
+  
+  # Check for NVIDIA GPU
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    echo "NVIDIA GPU detected:"
+    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>/dev/null || echo "Could not query GPU details"
+    
+    # Set GPU-specific Ollama environment variables
+    export OLLAMA_GPU_LAYERS=999  # Use all GPU layers
+    export OLLAMA_GPU=1
+    echo "✓ Ollama configured for GPU acceleration"
+  else
+    echo "⚠ No NVIDIA GPU detected or nvidia-smi not available"
+    echo "  Running in CPU-only mode"
+    export OLLAMA_GPU=0
+    export OLLAMA_GPU_LAYERS=0
+  fi
+  
+  # Check for CUDA availability
+  if [ -d "/usr/local/cuda" ] || [ -n "$CUDA_HOME" ]; then
+    echo "✓ CUDA installation detected"
+  else
+    echo "⚠ CUDA not found - GPU acceleration may not work"
+  fi
+  
+  echo "========================"
+}
+
 # Function to start Ollama server in background
 start_ollama_server() {
-  echo "Starting Ollama server..."
-  export OLLAMA_HOST=0.0.0.0:$OLLAMA_PORT
+  echo "Starting internal Ollama server on localhost:$OLLAMA_PORT..."
+  export OLLAMA_HOST=127.0.0.1:$OLLAMA_PORT
   ollama serve &
   OLLAMA_PID=$!
   
@@ -130,6 +160,18 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             self.handle_models()
         elif self.path == '/health' or self.path == '/v1/health':
             self.handle_health()
+        elif self.path.startswith('/v1/files'):
+            self.handle_files_get()
+        elif self.path.startswith('/v1/fine-tuning/jobs'):
+            self.handle_fine_tuning_get()
+        elif self.path.startswith('/v1/assistants'):
+            self.handle_assistants_get()
+        elif self.path.startswith('/v1/threads'):
+            self.handle_threads_get()
+        elif self.path.startswith('/v1/messages'):
+            self.handle_messages_get()
+        elif self.path.startswith('/v1/runs'):
+            self.handle_runs_get()
         else:
             self.send_error(404, 'Endpoint not found')
     
@@ -138,6 +180,48 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             self.handle_chat_completions()
         elif self.path == '/v1/completions':
             self.handle_completions()
+        elif self.path == '/v1/embeddings':
+            self.handle_embeddings()
+        elif self.path == '/v1/moderations':
+            self.handle_moderations()
+        elif self.path == '/v1/images/generations':
+            self.handle_images_generations()
+        elif self.path == '/v1/audio/transcriptions':
+            self.handle_audio_transcriptions()
+        elif self.path == '/v1/audio/translations':
+            self.handle_audio_translations()
+        elif self.path == '/v1/files':
+            self.handle_files_post()
+        elif self.path.startswith('/v1/fine-tuning/jobs'):
+            self.handle_fine_tuning_post()
+        elif self.path.startswith('/v1/assistants'):
+            self.handle_assistants_post()
+        elif self.path.startswith('/v1/threads'):
+            self.handle_threads_post()
+        elif self.path.startswith('/v1/messages'):
+            self.handle_messages_post()
+        elif self.path.startswith('/v1/runs'):
+            self.handle_runs_post()
+        else:
+            self.send_error(404, 'Endpoint not found')
+    
+    def do_DELETE(self):
+        if self.path.startswith('/v1/files/'):
+            self.handle_files_delete()
+        elif self.path.startswith('/v1/fine-tuning/jobs/'):
+            self.handle_fine_tuning_delete()
+        elif self.path.startswith('/v1/assistants/'):
+            self.handle_assistants_delete()
+        elif self.path.startswith('/v1/threads/'):
+            self.handle_threads_delete()
+        else:
+            self.send_error(404, 'Endpoint not found')
+    
+    def do_PATCH(self):
+        if self.path.startswith('/v1/assistants/'):
+            self.handle_assistants_patch()
+        elif self.path.startswith('/v1/threads/'):
+            self.handle_threads_patch()
         else:
             self.send_error(404, 'Endpoint not found')
     
@@ -410,6 +494,255 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             print(f"Error handling completions: {e}")
             self.send_error(500, f"Internal server error: {str(e)}")
+    
+    def handle_embeddings(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        try:
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            request_data = json.loads(post_data.decode('utf-8'))
+            
+            # Get input text
+            input_text = request_data.get("input", "")
+            if isinstance(input_text, list):
+                input_text = input_text[0] if input_text else ""
+            
+            # Make request to Ollama embeddings endpoint
+            ollama_request = {
+                "model": self.model_name,
+                "prompt": input_text
+            }
+            
+            response = requests.post(f"http://localhost:{self.ollama_port}/api/embeddings", 
+                                   json=ollama_request, timeout=60)
+            ollama_data = response.json()
+            
+            # Convert to OpenAI format
+            openai_response = {
+                "object": "list",
+                "data": [
+                    {
+                        "object": "embedding",
+                        "embedding": ollama_data.get("embedding", []),
+                        "index": 0
+                    }
+                ],
+                "model": self.served_model_name,
+                "usage": {
+                    "prompt_tokens": len(input_text.split()),
+                    "total_tokens": len(input_text.split())
+                }
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(openai_response).encode())
+            
+        except Exception as e:
+            print(f"Error handling embeddings: {e}")
+            self.send_error(500, f"Internal server error: {str(e)}")
+    
+    def handle_moderations(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        try:
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            request_data = json.loads(post_data.decode('utf-8'))
+            
+            # Simple moderation response (always safe for Ollama models)
+            openai_response = {
+                "id": f"modr-{int(time.time())}",
+                "model": "text-moderation-stable",
+                "results": [
+                    {
+                        "flagged": False,
+                        "categories": {
+                            "sexual": False,
+                            "hate": False,
+                            "violence": False,
+                            "self-harm": False,
+                            "sexual/minors": False,
+                            "hate/threatening": False,
+                            "violence/graphic": False
+                        },
+                        "category_scores": {
+                            "sexual": 0.0,
+                            "hate": 0.0,
+                            "violence": 0.0,
+                            "self-harm": 0.0,
+                            "sexual/minors": 0.0,
+                            "hate/threatening": 0.0,
+                            "violence/graphic": 0.0
+                        }
+                    }
+                ]
+            }
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(openai_response).encode())
+            
+        except Exception as e:
+            print(f"Error handling moderations: {e}")
+            self.send_error(500, f"Internal server error: {str(e)}")
+    
+    def handle_images_generations(self):
+        self.send_error(501, 'Image generation not supported by Ollama')
+    
+    def handle_audio_transcriptions(self):
+        self.send_error(501, 'Audio transcription not supported by Ollama')
+    
+    def handle_audio_translations(self):
+        self.send_error(501, 'Audio translation not supported by Ollama')
+    
+    # Files API endpoints
+    def handle_files_get(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        # Return empty file list
+        response = {
+            "object": "list",
+            "data": []
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
+    
+    def handle_files_post(self):
+        self.send_error(501, 'File upload not supported')
+    
+    def handle_files_delete(self):
+        self.send_error(501, 'File deletion not supported')
+    
+    # Fine-tuning API endpoints
+    def handle_fine_tuning_get(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        response = {
+            "object": "list",
+            "data": []
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
+    
+    def handle_fine_tuning_post(self):
+        self.send_error(501, 'Fine-tuning not supported by Ollama')
+    
+    def handle_fine_tuning_delete(self):
+        self.send_error(501, 'Fine-tuning not supported by Ollama')
+    
+    # Assistants API endpoints
+    def handle_assistants_get(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        response = {
+            "object": "list",
+            "data": []
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
+    
+    def handle_assistants_post(self):
+        self.send_error(501, 'Assistants API not supported by Ollama')
+    
+    def handle_assistants_delete(self):
+        self.send_error(501, 'Assistants API not supported by Ollama')
+    
+    def handle_assistants_patch(self):
+        self.send_error(501, 'Assistants API not supported by Ollama')
+    
+    # Threads API endpoints
+    def handle_threads_get(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        response = {
+            "object": "list",
+            "data": []
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
+    
+    def handle_threads_post(self):
+        self.send_error(501, 'Threads API not supported by Ollama')
+    
+    def handle_threads_delete(self):
+        self.send_error(501, 'Threads API not supported by Ollama')
+    
+    def handle_threads_patch(self):
+        self.send_error(501, 'Threads API not supported by Ollama')
+    
+    # Messages API endpoints
+    def handle_messages_get(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        response = {
+            "object": "list",
+            "data": []
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
+    
+    def handle_messages_post(self):
+        self.send_error(501, 'Messages API not supported by Ollama')
+    
+    # Runs API endpoints
+    def handle_runs_get(self):
+        if not self.check_auth():
+            self.send_error(401, 'Unauthorized')
+            return
+        
+        response = {
+            "object": "list",
+            "data": []
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(response).encode())
+    
+    def handle_runs_post(self):
+        self.send_error(501, 'Runs API not supported by Ollama')
 
 def run_proxy():
     port = int(os.environ.get('PORT', 9000))
@@ -420,6 +753,29 @@ def run_proxy():
     print(f"   GET  /health")
     print(f"   POST /v1/chat/completions")
     print(f"   POST /v1/completions")
+    print(f"   POST /v1/embeddings")
+    print(f"   POST /v1/moderations")
+    print(f"   POST /v1/images/generations (501 - Not Supported)")
+    print(f"   POST /v1/audio/transcriptions (501 - Not Supported)")
+    print(f"   POST /v1/audio/translations (501 - Not Supported)")
+    print(f"   GET  /v1/files")
+    print(f"   POST /v1/files (501 - Not Supported)")
+    print(f"   DELETE /v1/files/* (501 - Not Supported)")
+    print(f"   GET  /v1/fine-tuning/jobs")
+    print(f"   POST /v1/fine-tuning/jobs (501 - Not Supported)")
+    print(f"   DELETE /v1/fine-tuning/jobs/* (501 - Not Supported)")
+    print(f"   GET  /v1/assistants")
+    print(f"   POST /v1/assistants (501 - Not Supported)")
+    print(f"   DELETE /v1/assistants/* (501 - Not Supported)")
+    print(f"   PATCH /v1/assistants/* (501 - Not Supported)")
+    print(f"   GET  /v1/threads")
+    print(f"   POST /v1/threads (501 - Not Supported)")
+    print(f"   DELETE /v1/threads/* (501 - Not Supported)")
+    print(f"   PATCH /v1/threads/* (501 - Not Supported)")
+    print(f"   GET  /v1/messages")
+    print(f"   POST /v1/messages (501 - Not Supported)")
+    print(f"   GET  /v1/runs")
+    print(f"   POST /v1/runs (501 - Not Supported)")
     server.serve_forever()
 
 if __name__ == '__main__':
@@ -444,6 +800,9 @@ trap cleanup SIGTERM SIGINT
 # Main execution flow
 echo "🦙 Starting Ollama-based OpenAI-compatible API server"
 
+# Detect and configure GPU
+detect_gpu
+
 # Start Ollama server
 start_ollama_server
 
@@ -458,9 +817,12 @@ create_api_proxy
 
 echo "✅ All services started successfully!"
 echo ""
+echo "🌐 Unified OpenAI-Compatible API Server"
 echo "Model: $MODEL_NAME"
-echo "API Server: http://0.0.0.0:${PORT:-9000}"
-echo "Ollama Server: http://0.0.0.0:$OLLAMA_PORT"
+echo "Public API Endpoint: http://0.0.0.0:${PORT:-9000}"
+echo "Internal Ollama Server: http://localhost:$OLLAMA_PORT (internal only)"
+echo ""
+echo "🔗 Access your API at: http://localhost:${PORT:-9000}"
 echo ""
 
 # Start the API proxy (this will run in foreground)

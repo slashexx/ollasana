@@ -1,13 +1,30 @@
+# GPU-Compatible Ollama OpenAI API Server
+# 
+# To run with GPU support:
+#   docker run --gpus all -e MODEL_NAME=llama2 -p 9000:9000 your-image
+#
+# To run with specific GPU:
+#   docker run --gpus '"device=0"' -e MODEL_NAME=llama2 -p 9000:9000 your-image
+#
+# To run CPU-only:
+#   docker run -e MODEL_NAME=llama2 -p 9000:9000 your-image
+#
+# All services are unified and accessible through port 9000
+
 FROM ollama/ollama:latest
 
-# Install curl, python and other utilities
+# Install curl, python and other utilities + GPU support
 RUN apt-get update && apt-get install -y \
     curl \
     jq \
     bash \
     python3 \
     python3-pip \
+    nvidia-container-toolkit \
     && rm -rf /var/lib/apt/lists/*
+
+# Install NVIDIA Container Runtime (if not already present)
+RUN which nvidia-smi || echo "NVIDIA drivers will be mounted at runtime"
 
 # Install Python dependencies
 RUN pip3 install requests
@@ -16,6 +33,7 @@ RUN pip3 install requests
 ENV MODEL_NAME=""
 ENV SERVED_MODEL_NAME=""
 ENV PORT=9000
+# Global unified port - all API traffic goes through port 9000
 ENV MAX_MODEL_LEN=8192
 ENV QUANTIZATION=""
 ENV AWQ_WEIGHTS_PATH=""
@@ -33,6 +51,17 @@ ENV OLLAMA_PORT=11434
 ENV OLLAMA_MODELS=/data-models
 ENV OLLAMA_HOME=/tmp/ollama_home
 
+# GPU-specific environment variables
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV CUDA_VISIBLE_DEVICES=all
+
+# Ollama GPU configuration
+ENV OLLAMA_GPU=1
+ENV OLLAMA_NUM_GPU=-1
+ENV OLLAMA_GPU_MEMORY_FRACTION=0.9
+ENV OLLAMA_MAX_LOADED_MODELS=1
+
 # Remove HF legacy variables - Ollama uses its own registry
 # ENV HF_HOME, HF_HUB_CACHE, etc. are not needed for Ollama
 
@@ -43,8 +72,16 @@ RUN mkdir -p /data-models /tmp/ollama_home
 COPY start-ollama.sh /start-ollama.sh
 RUN chmod +x /start-ollama.sh
 
-# Expose ports
-EXPOSE 9000 11434
+# GPU runtime labels for Docker
+LABEL com.nvidia.volumes.needed="nvidia_driver"
+LABEL com.nvidia.cuda.version="12.0"
+
+# Expose only the unified API port
+EXPOSE 9000
+
+# Health check to verify GPU availability
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:9000/health || exit 1
 
 # Set the entrypoint
 ENTRYPOINT ["/start-ollama.sh"] 
