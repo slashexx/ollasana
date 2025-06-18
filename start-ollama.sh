@@ -288,6 +288,9 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             request_data = json.loads(post_data.decode('utf-8'))
             
+            # Log minimal request info
+            print(f"Chat completion request: model={request_data.get('model', 'unknown')}, messages={len(request_data.get('messages', []))}, stream={request_data.get('stream', False)}")
+            
             # Convert OpenAI format to Ollama format
             ollama_request = {
                 "model": self.model_name,
@@ -439,6 +442,9 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             request_data = json.loads(post_data.decode('utf-8'))
             
+            # Log minimal request info
+            print(f"Text completion request: model={request_data.get('model', 'unknown')}, prompt_length={len(request_data.get('prompt', ''))}")
+            
             # Convert to chat format for Ollama
             prompt = request_data.get("prompt", "")
             ollama_request = {
@@ -504,6 +510,14 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             request_data = json.loads(post_data.decode('utf-8'))
+            
+            # Log minimal request info  
+            input_text = request_data.get("input", "")
+            if isinstance(input_text, list):
+                input_len = len(input_text[0]) if input_text else 0
+            else:
+                input_len = len(input_text)
+            print(f"Embeddings request: model={request_data.get('model', 'unknown')}, input_length={input_len}")
             
             # Get input text
             input_text = request_data.get("input", "")
@@ -747,35 +761,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
 def run_proxy():
     port = int(os.environ.get('PORT', 9000))
     server = HTTPServer(('0.0.0.0', port), OllamaProxyHandler)
-    print(f"🚀 OpenAI-compatible API server running on http://0.0.0.0:{port}")
-    print(f"📋 Available endpoints:")
-    print(f"   GET  /v1/models")
-    print(f"   GET  /health")
-    print(f"   POST /v1/chat/completions")
-    print(f"   POST /v1/completions")
-    print(f"   POST /v1/embeddings")
-    print(f"   POST /v1/moderations")
-    print(f"   POST /v1/images/generations (501 - Not Supported)")
-    print(f"   POST /v1/audio/transcriptions (501 - Not Supported)")
-    print(f"   POST /v1/audio/translations (501 - Not Supported)")
-    print(f"   GET  /v1/files")
-    print(f"   POST /v1/files (501 - Not Supported)")
-    print(f"   DELETE /v1/files/* (501 - Not Supported)")
-    print(f"   GET  /v1/fine-tuning/jobs")
-    print(f"   POST /v1/fine-tuning/jobs (501 - Not Supported)")
-    print(f"   DELETE /v1/fine-tuning/jobs/* (501 - Not Supported)")
-    print(f"   GET  /v1/assistants")
-    print(f"   POST /v1/assistants (501 - Not Supported)")
-    print(f"   DELETE /v1/assistants/* (501 - Not Supported)")
-    print(f"   PATCH /v1/assistants/* (501 - Not Supported)")
-    print(f"   GET  /v1/threads")
-    print(f"   POST /v1/threads (501 - Not Supported)")
-    print(f"   DELETE /v1/threads/* (501 - Not Supported)")
-    print(f"   PATCH /v1/threads/* (501 - Not Supported)")
-    print(f"   GET  /v1/messages")
-    print(f"   POST /v1/messages (501 - Not Supported)")
-    print(f"   GET  /v1/runs")
-    print(f"   POST /v1/runs (501 - Not Supported)")
+    print(f"🚀 API server listening on port {port}")
     server.serve_forever()
 
 if __name__ == '__main__':
@@ -821,6 +807,15 @@ echo "🌐 Unified OpenAI-Compatible API Server"
 echo "Model: $MODEL_NAME"
 echo "Public API Endpoint: http://0.0.0.0:${PORT:-9000}"
 echo "Internal Ollama Server: http://localhost:$OLLAMA_PORT (internal only)"
+echo ""
+echo "📋 Available endpoints:"
+echo "   GET  /v1/models"
+echo "   GET  /health"
+echo "   POST /v1/chat/completions"
+echo "   POST /v1/completions"
+echo "   POST /v1/embeddings"
+echo "   POST /v1/moderations"
+echo "   + Additional OpenAI-compatible endpoints"
 echo ""
 echo "🔗 Access your API at: http://localhost:${PORT:-9000}"
 echo ""
