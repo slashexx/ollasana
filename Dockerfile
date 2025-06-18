@@ -13,18 +13,17 @@
 
 FROM ollama/ollama:latest
 
-# Install curl, python and other utilities + GPU support
+# Install curl, python and other utilities
 RUN apt-get update && apt-get install -y \
     curl \
     jq \
     bash \
     python3 \
     python3-pip \
-    nvidia-container-toolkit \
     && rm -rf /var/lib/apt/lists/*
 
-# Install NVIDIA Container Runtime (if not already present)
-RUN which nvidia-smi || echo "NVIDIA drivers will be mounted at runtime"
+# Note: nvidia-smi and GPU drivers will be mounted at runtime by Docker
+# when using --gpus flag. No need to install nvidia-container-toolkit inside container.
 
 # Install Python dependencies
 RUN pip3 install requests
