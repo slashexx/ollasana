@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: oneclickollama
-  IMAGE_TAG: "01"
+  IMAGE_NAME: oneclickllm
+  IMAGE_TAG: "ollama1"
 
 jobs:
   build:
