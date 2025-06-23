@@ -7,7 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE_NAME: oneclickollama:01
+  IMAGE_NAME: oneclickollama
+  IMAGE_TAG: "01"
 
 jobs:
   build:
@@ -57,10 +58,7 @@ jobs:
         with:
           images: docker.io/${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=ref,event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ env.IMAGE_TAG }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -70,6 +68,5 @@ jobs:
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          retry: 3
           cache-from: type=gha
           cache-to: type=gha,mode=max 
