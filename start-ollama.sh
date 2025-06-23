@@ -156,7 +156,9 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
     
     def do_GET(self):
-        if self.path == '/v1/models':
+        if self.path == '/':
+            self.handle_root()
+        elif self.path == '/v1/models':
             self.handle_models()
         elif self.path == '/health' or self.path == '/v1/health':
             self.handle_health()
@@ -234,6 +236,17 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             token = auth_header[7:]
             return token == self.api_key
         return False
+    
+    def handle_root(self):
+        response_data = {
+            "details": "not found"
+        }
+        
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(response_data).encode())
     
     def handle_models(self):
         if not self.check_auth():
