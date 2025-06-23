@@ -148,11 +148,17 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         # Suppress default HTTP server logs
         pass
     
+    def add_cors_headers(self):
+        """Add comprehensive CORS headers to all responses"""
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin')
+        self.send_header('Access-Control-Allow-Credentials', 'true')
+        self.send_header('Access-Control-Max-Age', '86400')
+    
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.add_cors_headers()
         self.end_headers()
     
     def do_GET(self):
@@ -244,7 +250,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response_data).encode())
     
@@ -270,7 +276,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(models_data).encode())
     
@@ -287,7 +293,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(status).encode())
     
@@ -347,7 +353,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Cache-Control', 'no-cache')
             self.send_header('Connection', 'keep-alive')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.add_cors_headers()
             self.end_headers()
             
             chat_id = f"chatcmpl-{int(time.time())}"
@@ -437,7 +443,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.add_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps(openai_response).encode())
             
@@ -506,7 +512,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.add_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps(openai_response).encode())
             
@@ -566,7 +572,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.add_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps(openai_response).encode())
             
@@ -615,7 +621,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
             
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.add_cors_headers()
             self.end_headers()
             self.wfile.write(json.dumps(openai_response).encode())
             
@@ -646,7 +652,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
     
@@ -669,7 +675,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
     
@@ -692,7 +698,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
     
@@ -718,7 +724,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
     
@@ -744,7 +750,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
     
@@ -764,7 +770,7 @@ class OllamaProxyHandler(BaseHTTPRequestHandler):
         
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.add_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(response).encode())
     
