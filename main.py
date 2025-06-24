@@ -106,7 +106,7 @@ class OllamaOrchestrator:
             print("Waiting for Ollama server to be ready...")
             for i in range(1, 61):  # 60 second timeout
                 try:
-                    response = requests.get(f"http://localhost:{self.ollama_port}/api/tags", timeout=2)
+                    response = requests.get(f"http://localhost:{self.ollama_port}/api/tags", timeout=5)
                     if response.status_code == 200:
                         print("✓ Ollama server is ready")
                         return
@@ -176,7 +176,7 @@ class OllamaOrchestrator:
                     "prompt": "Hello",
                     "stream": False
                 },
-                timeout=30
+                timeout=600
             )
             
             if response.status_code == 200:
