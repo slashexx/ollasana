@@ -67,11 +67,9 @@ ENV OLLAMA_MAX_LOADED_MODELS=1
 # Create necessary directories
 RUN mkdir -p /data-models /tmp/ollama_home
 
-# Copy Python orchestrator and API server
-COPY main.py /main.py
-COPY api_server.py /api_server.py
-RUN chmod +x /main.py
-RUN chmod +x /api_server.py
+# Copy unified application
+COPY app.py /app.py
+RUN chmod +x /app.py
 
 # GPU runtime labels for Docker
 LABEL com.nvidia.volumes.needed="nvidia_driver"
@@ -85,4 +83,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:9000/health || exit 1
 
 # Set the entrypoint
-ENTRYPOINT ["python3", "/main.py"] 
+ENTRYPOINT ["python3", "/app.py"] 
