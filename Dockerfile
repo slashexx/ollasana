@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
 # when using --gpus flag. No need to install nvidia-container-toolkit inside container.
 
 # Install Python dependencies
-RUN pip3 install requests
+RUN pip3 install requests fastapi uvicorn
 
 # Set environment variables with defaults (matching original)
 ENV MODEL_NAME=""
@@ -67,9 +67,11 @@ ENV OLLAMA_MAX_LOADED_MODELS=1
 # Create necessary directories
 RUN mkdir -p /data-models /tmp/ollama_home
 
-# Copy entrypoint script
+# Copy entrypoint script and API server
 COPY start-ollama.sh /start-ollama.sh
+COPY api_server.py /api_server.py
 RUN chmod +x /start-ollama.sh
+RUN chmod +x /api_server.py
 
 # GPU runtime labels for Docker
 LABEL com.nvidia.volumes.needed="nvidia_driver"
