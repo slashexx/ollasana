@@ -67,10 +67,10 @@ ENV OLLAMA_MAX_LOADED_MODELS=1
 # Create necessary directories
 RUN mkdir -p /data-models /tmp/ollama_home
 
-# Copy entrypoint script and API server
-COPY start-ollama.sh /start-ollama.sh
+# Copy Python orchestrator and API server
+COPY main.py /main.py
 COPY api_server.py /api_server.py
-RUN chmod +x /start-ollama.sh
+RUN chmod +x /main.py
 RUN chmod +x /api_server.py
 
 # GPU runtime labels for Docker
@@ -85,4 +85,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:9000/health || exit 1
 
 # Set the entrypoint
-ENTRYPOINT ["/start-ollama.sh"] 
+ENTRYPOINT ["python3", "/main.py"] 
