@@ -11,7 +11,8 @@
 #
 # All services are unified and accessible through port 9000
 
-FROM ollama/ollama:latest
+# Use NVIDIA CUDA base image for proper GPU acceleration
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04
 
 # Install curl, python and other utilities
 RUN apt-get update && apt-get install -y \
@@ -20,10 +21,13 @@ RUN apt-get update && apt-get install -y \
     bash \
     python3 \
     python3-pip \
+    ca-certificates \
+    gnupg \
+    lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Note: nvidia-smi and GPU drivers will be mounted at runtime by Docker
-# when using --gpus flag. No need to install nvidia-container-toolkit inside container.
+# Install Ollama manually to ensure GPU support
+RUN curl -fsSL https://ollama.com/install.sh | sh
 
 # Install Python dependencies
 RUN pip3 install requests fastapi uvicorn
@@ -55,14 +59,16 @@ ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV CUDA_VISIBLE_DEVICES=all
 
-# Ollama GPU configuration
+# Ollama GPU configuration - more aggressive for 70B models
 ENV OLLAMA_GPU=1
 ENV OLLAMA_NUM_GPU=-1
-ENV OLLAMA_GPU_MEMORY_FRACTION=0.9
+ENV OLLAMA_GPU_MEMORY_FRACTION=0.95
 ENV OLLAMA_MAX_LOADED_MODELS=1
+ENV OLLAMA_MAX_QUEUE=4
 
-# Remove HF legacy variables - Ollama uses its own registry
-# ENV HF_HOME, HF_HUB_CACHE, etc. are not needed for Ollama
+# CUDA specific environment variables for better GPU utilization
+ENV CUDA_CACHE_DISABLE=0
+ENV CUDA_CACHE_MAXSIZE=2147483648
 
 # Create necessary directories
 RUN mkdir -p /data-models /tmp/ollama_home
@@ -75,12 +81,12 @@ RUN chmod +x /api_server.py
 
 # GPU runtime labels for Docker
 LABEL com.nvidia.volumes.needed="nvidia_driver"
-LABEL com.nvidia.cuda.version="12.0"
+LABEL com.nvidia.cuda.version="12.1"
 
 # Expose only the unified API port
 EXPOSE 9000
 
-# Health check to verify GPU availability
+# Health check to verify GPU availability and model loading
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:9000/health || exit 1
 

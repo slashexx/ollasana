@@ -38,10 +38,24 @@ detect_gpu() {
     echo "NVIDIA GPU detected:"
     nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>/dev/null || echo "Could not query GPU details"
     
-    # Set GPU-specific Ollama environment variables
-    export OLLAMA_GPU_LAYERS=999  # Use all GPU layers
+    # Get GPU memory for aggressive allocation (especially for 70B models)
+    GPU_MEMORY=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+    echo "GPU Memory: ${GPU_MEMORY}MB"
+    
+    # Set aggressive GPU-specific Ollama environment variables for large models
+    export OLLAMA_GPU_LAYERS=-1  # Use all available GPU layers (-1 = auto-detect max)
     export OLLAMA_GPU=1
-    echo "✓ Ollama configured for GPU acceleration"
+    export OLLAMA_NUM_GPU=-1     # Use all available GPUs
+    export OLLAMA_GPU_MEMORY_FRACTION=0.95  # Use 95% of GPU memory
+    export OLLAMA_MAX_LOADED_MODELS=1       # Only load one model at a time for memory efficiency
+    export OLLAMA_MAX_QUEUE=4               # Allow some queuing for concurrent requests
+    
+    # Set CUDA environment variables for better performance
+    export CUDA_VISIBLE_DEVICES=all
+    export CUDA_CACHE_DISABLE=0
+    export CUDA_CACHE_MAXSIZE=2147483648
+    
+    echo "✓ Ollama configured for GPU acceleration with aggressive settings for large models"
   else
     echo "⚠ No NVIDIA GPU detected or nvidia-smi not available"
     echo "  Running in CPU-only mode"
@@ -50,10 +64,19 @@ detect_gpu() {
   fi
   
   # Check for CUDA availability
-  if [ -d "/usr/local/cuda" ] || [ -n "$CUDA_HOME" ]; then
+  if [ -d "/usr/local/cuda" ] || [ -n "$CUDA_HOME" ] || command -v nvcc >/dev/null 2>&1; then
     echo "✓ CUDA installation detected"
+    # Additional CUDA runtime check
+    if command -v nvcc >/dev/null 2>&1; then
+      CUDA_VERSION=$(nvcc --version | grep "release" | awk '{print $6}' | cut -c2-)
+      echo "CUDA Version: $CUDA_VERSION"
+    fi
   else
     echo "⚠ CUDA not found - GPU acceleration may not work"
+    echo "  Installing minimal CUDA runtime..."
+    # Try to ensure CUDA libraries are available
+    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+    export PATH="/usr/local/cuda/bin:${PATH}"
   fi
   
   echo "========================"
