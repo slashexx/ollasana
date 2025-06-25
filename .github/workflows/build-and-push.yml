@@ -8,7 +8,7 @@ on:
 
 env:
   IMAGE_NAME: oneclickllm
-  IMAGE_TAG: "ollama-fastapi"
+  IMAGE_TAG: "stabllama"
 
 jobs:
   build:
