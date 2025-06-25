@@ -12,7 +12,7 @@
 # All services are unified and accessible through port 9000
 
 # Use NVIDIA CUDA base image for proper GPU acceleration
-FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.0-runtime-ubuntu22.04
 
 # Install curl, python and other utilities
 RUN apt-get update && apt-get install -y \
@@ -81,7 +81,7 @@ RUN chmod +x /api_server.py
 
 # GPU runtime labels for Docker
 LABEL com.nvidia.volumes.needed="nvidia_driver"
-LABEL com.nvidia.cuda.version="12.1"
+LABEL com.nvidia.cuda.version="12.0"
 
 # Expose only the unified API port
 EXPOSE 9000
