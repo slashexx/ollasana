@@ -72,11 +72,9 @@ ENV OLLAMA_LLM_LIBRARY=cuda_v12
 # Create necessary directories
 RUN mkdir -p /data-models /tmp/ollama_home
 
-# Copy Python orchestrator and API server
+# Copy unified server
 COPY main.py /main.py
-COPY api_server.py /api_server.py
 RUN chmod +x /main.py
-RUN chmod +x /api_server.py
 
 # GPU runtime labels for Docker
 LABEL com.nvidia.volumes.needed="nvidia_driver"

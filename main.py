@@ -1,344 +1,236 @@
 #!/usr/bin/env python3
 import os
 import sys
+
+# Force unbuffered output for real-time logs in containers
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 import time
 import subprocess
 import signal
 import requests
 import shutil
 from pathlib import Path
+from typing import Optional, List
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
+import uvicorn
 
-class OllamaOrchestrator:
-    def __init__(self):
-        self.model_name = os.environ.get('MODEL_NAME', '').strip()
-        self.served_model_name = os.environ.get('SERVED_MODEL_NAME', self.model_name)
-        self.port = int(os.environ.get('PORT', 9000))
-        self.ollama_port = os.environ.get('OLLAMA_PORT', '11434')
-        self.ollama_process = None
-        
-        # Validate required environment variables
-        if not self.model_name:
-            print("❌ ERROR: MODEL_NAME environment variable is required")
-            print("Please provide an Ollama model name (e.g., llama2, mistral, codellama, etc.)")
-            print("See https://ollama.ai/library for available models")
-            sys.exit(1)
-        
-        if not self.served_model_name:
-            self.served_model_name = self.model_name
-            print(f"SERVED_MODEL_NAME not provided, using: {self.served_model_name}")
-        
-        # Set up environment
-        self.setup_environment()
-        
-    def setup_environment(self):
-        """Set up necessary directories and environment variables"""
-        ollama_models = os.environ.get('OLLAMA_MODELS', '/data-models')
-        ollama_home = os.environ.get('OLLAMA_HOME', '/tmp/ollama_home')
-        
-        Path(ollama_models).mkdir(parents=True, exist_ok=True)
-        Path(ollama_home).mkdir(parents=True, exist_ok=True)
-        
-        print("=== Ollama Model Server Configuration ===")
-        print(f"Model: {self.model_name}")
-        print(f"Served Model Name: {self.served_model_name}")
-        print(f"Unified API Port: {self.port}")
-        print(f"Internal Ollama Port: {self.ollama_port} (not exposed)")
-        print(f"Models Directory: {ollama_models}")
-        print("==========================================")
-        
-    def detect_gpu(self):
-        """Detect and configure GPU support"""
-        print("=== GPU Detection ===")
-        
-        gpu_available = False
-        
-        # Check for NVIDIA GPU
-        if shutil.which('nvidia-smi'):
-            try:
-                result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total,driver_version', 
-                                       '--format=csv,noheader,nounits'], 
-                                      capture_output=True, text=True, timeout=10)
-                if result.returncode == 0:
-                    print("NVIDIA GPU detected:")
-                    print(result.stdout.strip())
-                    gpu_available = True
-                else:
-                    print("⚠ Could not query GPU details but nvidia-smi exists")
-                    gpu_available = True  # Try GPU anyway
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                print("⚠ nvidia-smi available but failed to execute")
-                gpu_available = True  # Try GPU anyway
-        else:
-            print("⚠ No nvidia-smi found")
-        
-        # GPU is mandatory - no CPU fallback
-        if gpu_available:
-            # Set GPU-specific Ollama environment variables
-            os.environ['OLLAMA_GPU_LAYERS'] = '999'  # Use all GPU layers
-            os.environ['OLLAMA_GPU'] = '1'
-            os.environ['OLLAMA_LLM_LIBRARY'] = 'cuda_v12'  # Force CUDA
-            print(f"🚀 GPU acceleration enabled for model: {self.model_name}")
-            print("✓ Ollama configured for GPU acceleration")
-        else:
-            print("✗ FATAL: No GPU available")
-            print("✗ This deployment requires GPU acceleration")
-            print("✗ Check your GPU allocation and container runtime")
-            self.cleanup()
-            sys.exit(1)
-        
-        # Check for CUDA availability (but don't fail if missing in cloud environments)
-        if Path("/usr/local/cuda").exists() or os.environ.get('CUDA_HOME'):
-            print("✓ CUDA installation detected")
-        else:
-            print("⚠ CUDA not found locally - relying on container runtime")
-        
-        print("========================")
+# Global configuration
+MODEL_NAME = os.environ.get('MODEL_NAME', '').strip()
+SERVED_MODEL_NAME = os.environ.get('SERVED_MODEL_NAME', MODEL_NAME)
+PORT = int(os.environ.get('PORT', 9000))
+OLLAMA_PORT = int(os.environ.get('OLLAMA_PORT', 11434))
+API_KEY = os.environ.get('API_KEY', '')
+VALIDATION_TIMEOUT = int(os.environ.get('VALIDATION_TIMEOUT', 0))
+
+# Global state
+ollama_process = None
+
+# Validate required environment
+if not MODEL_NAME:
+    print("❌ ERROR: MODEL_NAME environment variable is required")
+    sys.exit(1)
+
+if not SERVED_MODEL_NAME:
+    SERVED_MODEL_NAME = MODEL_NAME
+
+print("=== Ollama GPU-Only Server ===", flush=True)
+print(f"Model: {MODEL_NAME}", flush=True)
+print(f"Port: {PORT}", flush=True)
+print("===============================", flush=True)
+
+def detect_gpu():
+    """GPU Detection - MANDATORY"""
+    print("=== GPU Detection ===", flush=True)
     
-    def start_ollama_server(self):
-        """Start Ollama server in background"""
-        print(f"Starting internal Ollama server on localhost:{self.ollama_port}...")
-        
-        os.environ['OLLAMA_HOST'] = f'127.0.0.1:{self.ollama_port}'
-        
-        try:
-            self.ollama_process = subprocess.Popen(
-                ['ollama', 'serve'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            
-            # Wait for Ollama server to be ready
-            print("Waiting for Ollama server to be ready...")
-            for i in range(1, 61):  # 60 second timeout
-                try:
-                    response = requests.get(f"http://localhost:{self.ollama_port}/api/tags", timeout=5)
-                    if response.status_code == 200:
-                        print("✓ Ollama server is ready")
-                        return
-                except requests.exceptions.RequestException:
-                    pass
-                
-                if i == 60:
-                    print("✗ Ollama server failed to start within 60 seconds")
-                    self.cleanup()
-                    sys.exit(1)
-                
-                print(f"  Waiting... ({i}/60)")
-                time.sleep(1)
-                
-        except FileNotFoundError:
-            print("✗ Ollama binary not found. Please ensure Ollama is installed.")
-            sys.exit(1)
-        except Exception as e:
-            print(f"✗ Failed to start Ollama server: {e}")
-            sys.exit(1)
+    gpu_available = False
     
-    def load_ollama_model(self):
-        """Pull and load the specified Ollama model"""
-        print(f"Loading Ollama model: {self.model_name}")
-        
-        # Check if model is already available locally
+    if shutil.which('nvidia-smi'):
         try:
-            result = subprocess.run(['ollama', 'list'], capture_output=True, text=True, timeout=10)
-            if result.returncode == 0 and self.model_name in result.stdout:
-                print(f"✓ Model {self.model_name} is already available locally")
-                return
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
-        
-        print(f"Pulling model {self.model_name} from Ollama registry...")
-        print("This may take several minutes depending on model size...")
-        
-        try:
-            result = subprocess.run(['ollama', 'pull', self.model_name], 
-                                  capture_output=False, timeout=1800)  # 30 min timeout
+            result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], 
+                                  capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
-                print(f"✓ Successfully pulled model: {self.model_name}")
+                print("GPU detected:", flush=True)
+                print(result.stdout.strip(), flush=True)
+                gpu_available = True
             else:
-                print(f"✗ Failed to pull model: {self.model_name}")
-                print("Please check if the model name is correct.")
-                print("Available models can be found at: https://ollama.ai/library")
-                self.cleanup()
-                sys.exit(1)
-        except subprocess.TimeoutExpired:
-            print("✗ Model pull timed out after 30 minutes")
-            self.cleanup()
-            sys.exit(1)
-        except Exception as e:
-            print(f"✗ Failed to pull model: {e}")
-            self.cleanup()
-            sys.exit(1)
+                gpu_available = True  # Try anyway
+        except:
+            gpu_available = True  # Try anyway
     
-    def validate_model(self):
-        """Validate that the model is working correctly"""
-        print("Validating model functionality...")
+    if gpu_available:
+        os.environ['OLLAMA_GPU_LAYERS'] = '999'
+        os.environ['OLLAMA_GPU'] = '1'
+        os.environ['OLLAMA_LLM_LIBRARY'] = 'cuda_v12'
+        print(f"🚀 GPU enabled for: {MODEL_NAME}", flush=True)
+        print("✓ GPU acceleration configured", flush=True)
+    else:
+        print("✗ FATAL: No GPU available")
+        print("✗ GPU required for deployment")
+        sys.exit(1)
+    
+    print("========================")
+
+def start_ollama():
+    """Start Ollama server"""
+    global ollama_process
+    print(f"Starting Ollama server...", flush=True)
+    
+    os.environ['OLLAMA_HOST'] = f'127.0.0.1:{OLLAMA_PORT}'
+    
+    try:
+        ollama_process = subprocess.Popen(['ollama', 'serve'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
-        # Get validation timeout from environment, with different defaults based on model size
-        validation_timeout = int(os.environ.get('VALIDATION_TIMEOUT', '0'))
-        
-        # Auto-detect if this is likely a large model and set appropriate timeout
-        if validation_timeout == 0:
-            model_lower = self.model_name.lower()
-            # Check for large model indicators
-            if any(size in model_lower for size in ['34b', '70b', '65b', '180b']) or \
-               any(keyword in model_lower for keyword in ['llava', 'vision']) or \
-               ('q4' not in model_lower and 'q5' not in model_lower and 'q8' not in model_lower):
-                validation_timeout = 1800  # 30 minutes for large models
-                print(f"⏳ Large model detected - using extended timeout: {validation_timeout} seconds")
-            else:
-                validation_timeout = 600  # 10 minutes for smaller models
-                print(f"⏳ Standard model - using timeout: {validation_timeout} seconds")
-        else:
-            print(f"⏳ Using custom timeout: {validation_timeout} seconds")
-        
-        # First, try to preload the model for large models
-        if validation_timeout > 600:
-            print("🔄 Pre-loading large model (this may take several minutes)...")
+        print("Waiting for Ollama...", flush=True)
+        for i in range(60):
             try:
-                # Use a smaller prompt first to trigger model loading
-                preload_response = requests.post(
-                    f"http://localhost:{self.ollama_port}/api/generate",
-                    json={
-                        "model": self.model_name,
-                        "prompt": "Hi",
-                        "stream": False,
-                        "options": {
-                            "num_predict": 1  # Just generate 1 token to minimize time
-                        }
-                    },
-                    timeout=validation_timeout * 0.8  # Use 80% of timeout for preload
-                )
-                if preload_response.status_code == 200:
-                    print("✓ Model pre-loading successful")
-                else:
-                    print(f"⚠ Model pre-loading got status {preload_response.status_code}")
-            except requests.exceptions.Timeout:
-                print("⚠ Model pre-loading timed out, but continuing with validation...")
-            except Exception as e:
-                print(f"⚠ Model pre-loading failed: {e}, but continuing with validation...")
-        
-        # Now do the actual validation
-        print("🧪 Running model validation test...")
-        try:
-            response = requests.post(
-                f"http://localhost:{self.ollama_port}/api/generate",
-                json={
-                    "model": self.model_name,
-                    "prompt": "Hello, how are you?",
-                    "stream": False,
-                    "options": {
-                        "num_predict": 50  # Limit response length for faster validation
-                    }
-                },
-                timeout=validation_timeout
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'response' in data and data['response'].strip():
-                    print("✓ Model validation successful")
-                    print(f"  Sample response: {data['response'][:100]}...")
+                response = requests.get(f"http://localhost:{OLLAMA_PORT}/api/tags", timeout=2)
+                if response.status_code == 200:
+                    print("✓ Ollama ready", flush=True)
                     return
-                else:
-                    print("✗ Model validation failed - empty response")
-                    print(f"Full response: {data}")
-            else:
-                print(f"✗ Model validation failed - HTTP {response.status_code}")
-                print(f"Response: {response.text}")
-            
-            self.cleanup()
-            sys.exit(1)
-            
-        except requests.exceptions.Timeout:
-            print(f"✗ Model validation timed out after {validation_timeout} seconds")
-            print("💡 For very large models, try setting VALIDATION_TIMEOUT environment variable to a higher value (e.g., 3600 for 1 hour)")
-            self.cleanup()
-            sys.exit(1)
-        except Exception as e:
-            print(f"✗ Model validation failed: {e}")
-            self.cleanup()
-            sys.exit(1)
-    
-    def start_fastapi_server(self):
-        """Start the FastAPI server"""
-        print("✅ All services started successfully!")
-        print("")
-        print("🌐 Unified OpenAI-Compatible API Server")
-        print(f"Model: {self.model_name}")
-        print(f"Public API Endpoint: http://0.0.0.0:{self.port}")
-        print(f"Internal Ollama Server: http://localhost:{self.ollama_port} (internal only)")
-        print("")
-        print("📋 Available endpoints:")
-        print("   GET  /v1/models")
-        print("   GET  /health")
-        print("   POST /v1/chat/completions")
-        print("   POST /v1/completions")
-        print("   POST /v1/embeddings")
-        print("   POST /v1/moderations")
-        print("   + Additional OpenAI-compatible endpoints")
-        print("")
-        print(f"🔗 Access your API at: http://localhost:{self.port}")
-        print("")
-        print("Starting FastAPI server...")
-        
-        # Import and run FastAPI server
-        import uvicorn
-        from api_server import app
-        
-        uvicorn.run(app, host="0.0.0.0", port=self.port, log_level="info")
-    
-    def cleanup(self):
-        """Clean up processes on exit"""
-        print("Shutting down services...")
-        if self.ollama_process and self.ollama_process.poll() is None:
-            try:
-                self.ollama_process.terminate()
-                self.ollama_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.ollama_process.kill()
-            except Exception:
+            except:
                 pass
+            
+            if i == 59:
+                print("✗ Ollama failed to start")
+                sys.exit(1)
+            
+            time.sleep(1)
+            
+    except Exception as e:
+        print(f"✗ Ollama error: {e}")
+        sys.exit(1)
+
+def load_model():
+    """Load model"""
+    print(f"Loading: {MODEL_NAME}", flush=True)
     
-    def setup_signal_handlers(self):
-        """Set up signal handlers for graceful shutdown"""
-        def signal_handler(signum, frame):
-            self.cleanup()
-            sys.exit(0)
+    try:
+        result = subprocess.run(['ollama', 'pull', MODEL_NAME], timeout=1800)
+        if result.returncode == 0:
+            print(f"✓ Model loaded: {MODEL_NAME}", flush=True)
+        else:
+            print(f"✗ Failed to load: {MODEL_NAME}", flush=True)
+            sys.exit(1)
+    except Exception as e:
+        print(f"✗ Model error: {e}")
+        sys.exit(1)
+
+def validate_model():
+    """Validate model"""
+    print("Validating model...", flush=True)
+    
+    timeout = VALIDATION_TIMEOUT if VALIDATION_TIMEOUT > 0 else (1800 if any(x in MODEL_NAME.lower() for x in ['34b', '70b', 'llava']) else 600)
+    print(f"⏳ Timeout: {timeout}s", flush=True)
+    
+    try:
+        response = requests.post(
+            f"http://localhost:{OLLAMA_PORT}/api/generate",
+            json={"model": MODEL_NAME, "prompt": "Hi", "stream": False, "options": {"num_predict": 5}},
+            timeout=timeout
+        )
         
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
-    
-    def run(self):
-        """Main orchestration method"""
+        if response.status_code == 200 and response.json().get('response'):
+            print("✓ Validation successful", flush=True)
+        else:
+            print("✗ Validation failed", flush=True)
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"✗ Validation error: {e}")
+        sys.exit(1)
+
+def cleanup():
+    """Cleanup"""
+    global ollama_process
+    if ollama_process:
         try:
-            print("🦙 Starting Ollama-based OpenAI-compatible API server")
-            
-            # Set up signal handlers
-            self.setup_signal_handlers()
-            
-            # Detect and configure GPU
-            self.detect_gpu()
-            
-            # Start Ollama server
-            self.start_ollama_server()
-            
-            # Load the Ollama model
-            self.load_ollama_model()
-            
-            # Validate model is working
-            self.validate_model()
-            
-            # Start the FastAPI server (runs in foreground)
-            self.start_fastapi_server()
-            
-        except KeyboardInterrupt:
-            print("\n⚠ Received interrupt signal")
-        except Exception as e:
-            print(f"❌ Unexpected error: {e}")
-        finally:
-            self.cleanup()
+            ollama_process.terminate()
+            ollama_process.wait(timeout=5)
+        except:
+            ollama_process.kill() if ollama_process else None
+
+signal.signal(signal.SIGTERM, lambda s, f: (cleanup(), sys.exit(0)))
+signal.signal(signal.SIGINT, lambda s, f: (cleanup(), sys.exit(0)))
+
+# FastAPI App
+app = FastAPI(title="Ollama OpenAI API")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+security = HTTPBearer(auto_error=False)
+
+def verify_key(creds = Depends(security)):
+    if API_KEY and (not creds or creds.credentials != API_KEY):
+        raise HTTPException(401, "Invalid API key")
+    return True
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    model: str
+    messages: List[ChatMessage]
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    stream: Optional[bool] = False
+
+@app.get("/health")
+async def health():
+    try:
+        r = requests.get(f"http://localhost:{OLLAMA_PORT}/api/tags", timeout=5)
+        return {"status": "healthy" if r.status_code == 200 else "unhealthy"}
+    except:
+        return {"status": "unhealthy"}
+
+@app.get("/v1/models")
+async def models(auth = Depends(verify_key)):
+    return {"object": "list", "data": [{"id": SERVED_MODEL_NAME, "object": "model", "created": int(time.time())}]}
+
+@app.post("/v1/chat/completions")
+async def chat(request: ChatRequest, auth = Depends(verify_key)):
+    try:
+        req = {"model": MODEL_NAME, "messages": [{"role": m.role, "content": m.content} for m in request.messages]}
+        if request.temperature: req["options"] = {"temperature": request.temperature}
+        if request.max_tokens: req.setdefault("options", {})["num_predict"] = request.max_tokens
+        
+        r = requests.post(f"http://localhost:{OLLAMA_PORT}/api/chat", json=req, timeout=300)
+        data = r.json()
+        
+        return {
+            "id": f"chat-{int(time.time())}",
+            "object": "chat.completion",
+            "model": SERVED_MODEL_NAME,
+            "choices": [{
+                "message": {"role": "assistant", "content": data.get("message", {}).get("content", "")},
+                "finish_reason": "stop"
+            }]
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+def main():
+    print("🦙 Starting Ollama GPU Server", flush=True)
+    
+    try:
+        detect_gpu()
+        start_ollama()
+        load_model()
+        validate_model()
+        
+        print("✅ Ready!", flush=True)
+        print(f"🌐 API: http://0.0.0.0:{PORT}", flush=True)
+        print("", flush=True)
+        
+        uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="info")
+        
+    except Exception as e:
+        print(f"❌ Error: {e}")
+    finally:
+        cleanup()
 
 if __name__ == "__main__":
-    orchestrator = OllamaOrchestrator()
-    orchestrator.run() 
+    main() 
