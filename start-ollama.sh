@@ -109,15 +109,60 @@ load_ollama_model() {
 validate_model() {
   echo "Validating model functionality..."
   
-  # Test the model with a simple prompt
+  # Get validation timeout from environment, with different defaults based on model size
+  local validation_timeout=${VALIDATION_TIMEOUT:-0}
+  
+  # Auto-detect if this is likely a large model and set appropriate timeout
+  if [ "$validation_timeout" -eq 0 ]; then
+    local model_lower=$(echo "$MODEL_NAME" | tr '[:upper:]' '[:lower:]')
+    # Check for large model indicators
+    if echo "$model_lower" | grep -qE '(34b|70b|65b|180b|llava|vision)' || \
+       ! echo "$model_lower" | grep -qE '(q4|q5|q8)'; then
+      validation_timeout=1800  # 30 minutes for large models
+      echo "⏳ Detected large model - using extended timeout: $validation_timeout seconds"
+    else
+      validation_timeout=600   # 10 minutes for smaller models
+      echo "⏳ Using standard timeout: $validation_timeout seconds"
+    fi
+  else
+    echo "⏳ Using custom timeout: $validation_timeout seconds"
+  fi
+  
+  # First, try to preload the model for large models
+  if [ "$validation_timeout" -gt 600 ]; then
+    echo "🔄 Pre-loading large model (this may take several minutes)..."
+    local preload_timeout=$((validation_timeout * 80 / 100))  # 80% of total timeout
+    local preload_response
+    preload_response=$(curl -s -X POST http://localhost:$OLLAMA_PORT/api/generate \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"Hi\",\"stream\":false,\"options\":{\"num_predict\":1}}" \
+      --max-time "$preload_timeout" 2>/dev/null || echo "timeout")
+    
+    if echo "$preload_response" | grep -q "response"; then
+      echo "✓ Model pre-loading successful"
+    elif [ "$preload_response" = "timeout" ]; then
+      echo "⚠ Model pre-loading timed out, but continuing with validation..."
+    else
+      echo "⚠ Model pre-loading failed, but continuing with validation..."
+    fi
+  fi
+  
+  # Now do the actual validation
+  echo "🧪 Running model validation test..."
   local test_response
   test_response=$(curl -s -X POST http://localhost:$OLLAMA_PORT/api/generate \
     -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"Hello\",\"stream\":false}" \
-    --max-time 30)
+    -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"Hello, how are you?\",\"stream\":false,\"options\":{\"num_predict\":50}}" \
+    --max-time "$validation_timeout" 2>/dev/null || echo "timeout")
   
-  if echo "$test_response" | grep -q "response"; then
+  if echo "$test_response" | grep -q "response" && [ "$test_response" != "timeout" ]; then
     echo "✓ Model validation successful"
+    local sample_response=$(echo "$test_response" | grep -o '"response":"[^"]*"' | head -c 100)
+    echo "  Sample response: $sample_response..."
+  elif [ "$test_response" = "timeout" ]; then
+    echo "✗ Model validation timed out after $validation_timeout seconds"
+    echo "💡 For very large models, try setting VALIDATION_TIMEOUT environment variable to a higher value (e.g., 3600 for 1 hour)"
+    exit 1
   else
     echo "✗ Model validation failed"
     echo "Response: $test_response"

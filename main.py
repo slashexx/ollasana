@@ -168,28 +168,87 @@ class OllamaOrchestrator:
         """Validate that the model is working correctly"""
         print("Validating model functionality...")
         
+        # Get validation timeout from environment, with different defaults based on model size
+        validation_timeout = int(os.environ.get('VALIDATION_TIMEOUT', '0'))
+        
+        # Auto-detect if this is likely a large model and set appropriate timeout
+        if validation_timeout == 0:
+            model_lower = self.model_name.lower()
+            # Check for large model indicators
+            if any(size in model_lower for size in ['34b', '70b', '65b', '180b']) or \
+               any(keyword in model_lower for keyword in ['llava', 'vision']) or \
+               'q4' not in model_lower and 'q5' not in model_lower and 'q8' not in model_lower:
+                validation_timeout = 1800  # 30 minutes for large models
+                print(f"⏳ Detected large model - using extended timeout: {validation_timeout} seconds")
+            else:
+                validation_timeout = 600  # 10 minutes for smaller models
+                print(f"⏳ Using standard timeout: {validation_timeout} seconds")
+        else:
+            print(f"⏳ Using custom timeout: {validation_timeout} seconds")
+        
+        # First, try to preload the model for large models
+        if validation_timeout > 600:
+            print("🔄 Pre-loading large model (this may take several minutes)...")
+            try:
+                # Use a smaller prompt first to trigger model loading
+                preload_response = requests.post(
+                    f"http://localhost:{self.ollama_port}/api/generate",
+                    json={
+                        "model": self.model_name,
+                        "prompt": "Hi",
+                        "stream": False,
+                        "options": {
+                            "num_predict": 1  # Just generate 1 token to minimize time
+                        }
+                    },
+                    timeout=validation_timeout * 0.8  # Use 80% of timeout for preload
+                )
+                if preload_response.status_code == 200:
+                    print("✓ Model pre-loading successful")
+                else:
+                    print(f"⚠ Model pre-loading got status {preload_response.status_code}")
+            except requests.exceptions.Timeout:
+                print("⚠ Model pre-loading timed out, but continuing with validation...")
+            except Exception as e:
+                print(f"⚠ Model pre-loading failed: {e}, but continuing with validation...")
+        
+        # Now do the actual validation
+        print("🧪 Running model validation test...")
         try:
             response = requests.post(
                 f"http://localhost:{self.ollama_port}/api/generate",
                 json={
                     "model": self.model_name,
-                    "prompt": "Hello",
-                    "stream": False
+                    "prompt": "Hello, how are you?",
+                    "stream": False,
+                    "options": {
+                        "num_predict": 50  # Limit response length for faster validation
+                    }
                 },
-                timeout=600
+                timeout=validation_timeout
             )
             
             if response.status_code == 200:
                 data = response.json()
-                if 'response' in data:
+                if 'response' in data and data['response'].strip():
                     print("✓ Model validation successful")
+                    print(f"  Sample response: {data['response'][:100]}...")
                     return
+                else:
+                    print("✗ Model validation failed - empty response")
+                    print(f"Full response: {data}")
+            else:
+                print(f"✗ Model validation failed - HTTP {response.status_code}")
+                print(f"Response: {response.text}")
             
-            print("✗ Model validation failed")
-            print(f"Response: {response.text}")
             self.cleanup()
             sys.exit(1)
             
+        except requests.exceptions.Timeout:
+            print(f"✗ Model validation timed out after {validation_timeout} seconds")
+            print("💡 For very large models, try setting VALIDATION_TIMEOUT environment variable to a higher value (e.g., 3600 for 1 hour)")
+            self.cleanup()
+            sys.exit(1)
         except Exception as e:
             print(f"✗ Model validation failed: {e}")
             self.cleanup()

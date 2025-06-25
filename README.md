@@ -26,6 +26,7 @@ SERVED_MODEL_NAME=my-model     # Model name exposed via API (defaults to MODEL_N
 API_KEY=your-secret-key        # Optional API key for authentication
 OLLAMA_MODELS=/app/models      # Model storage directory
 OLLAMA_HOME=/app/ollama        # Ollama home directory
+VALIDATION_TIMEOUT=1800        # Model validation timeout in seconds (auto-detected for large models)
 ```
 
 ### Docker Usage
@@ -418,6 +419,53 @@ Visit [Ollama Library](https://ollama.ai/library) for a complete list of availab
 ### Logs
 
 The server provides detailed logging for requests and errors. Monitor the console output for debugging information.
+
+### Large Model Support
+
+This server includes special support for large models (34B+ parameters) with the following features:
+
+- **Auto-detection**: Large models are automatically detected based on model name patterns
+- **Extended Timeouts**: Large models get 30-minute validation timeouts by default
+- **Pre-loading**: Models are pre-loaded with a minimal prompt to reduce validation time
+- **Custom Timeouts**: Override with `VALIDATION_TIMEOUT` environment variable
+
+#### Common Large Models
+
+These model patterns are automatically detected as large models:
+- Models with `34b`, `70b`, `65b`, `180b` in the name
+- Vision models like `llava`, `vision` models
+- Models without quantization indicators (`q4`, `q5`, `q8`)
+
+#### Troubleshooting Large Models
+
+If you encounter timeout errors with large models:
+
+```bash
+# Set a longer timeout (in seconds)
+export VALIDATION_TIMEOUT=3600  # 1 hour
+
+# For very large models or slow hardware
+export VALIDATION_TIMEOUT=7200  # 2 hours
+
+#### Example: Running LLaVA 34B
+
+```bash
+# Docker example with large model
+docker run -d \
+  --gpus all \
+  --name ollama-llava \
+  -p 9000:9000 \
+  -e MODEL_NAME=llava:34b-v1.6-q5_K_M \
+  -e VALIDATION_TIMEOUT=3600 \
+  -e PORT=9000 \
+  your-image-name
+
+# Local example
+export MODEL_NAME=llava:34b-v1.6-q5_K_M
+export VALIDATION_TIMEOUT=3600
+export PORT=9000
+./start-ollama.sh
+```
 
 ## Contributing
 
