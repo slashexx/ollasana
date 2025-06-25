@@ -193,12 +193,21 @@ async def models(auth = Depends(verify_key)):
 @app.post("/v1/chat/completions")
 async def chat(request: ChatRequest, auth = Depends(verify_key)):
     try:
+        print(f"Chat request received: {request.model}", flush=True)
         req = {"model": MODEL_NAME, "messages": [{"role": m.role, "content": m.content} for m in request.messages]}
         if request.temperature: req["options"] = {"temperature": request.temperature}
         if request.max_tokens: req.setdefault("options", {})["num_predict"] = request.max_tokens
         
+        print(f"Sending to Ollama: {req}", flush=True)
         r = requests.post(f"http://localhost:{OLLAMA_PORT}/api/chat", json=req, timeout=300)
+        print(f"Ollama response status: {r.status_code}", flush=True)
+        
+        if r.status_code != 200:
+            print(f"Ollama error response: {r.text}", flush=True)
+            raise HTTPException(500, f"Ollama returned {r.status_code}: {r.text}")
+        
         data = r.json()
+        print(f"Ollama response data: {data}", flush=True)
         
         return {
             "id": f"chat-{int(time.time())}",
@@ -210,6 +219,7 @@ async def chat(request: ChatRequest, auth = Depends(verify_key)):
             }]
         }
     except Exception as e:
+        print(f"Chat error: {e}", flush=True)
         raise HTTPException(500, str(e))
 
 def main():
