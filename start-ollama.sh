@@ -33,27 +33,41 @@ echo "========================================="
 detect_gpu() {
   echo "=== GPU Detection ==="
   
+  local gpu_available=false
+  
   # Check for NVIDIA GPU
   if command -v nvidia-smi >/dev/null 2>&1; then
     echo "NVIDIA GPU detected:"
-    nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>/dev/null || echo "Could not query GPU details"
-    
+    if nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>/dev/null; then
+      gpu_available=true
+    else
+      echo "Could not query GPU details but nvidia-smi exists"
+      gpu_available=true  # Try GPU anyway
+    fi
+  else
+    echo "⚠ No nvidia-smi found"
+  fi
+  
+  # GPU is mandatory - no CPU fallback
+  if [ "$gpu_available" = true ]; then
     # Set GPU-specific Ollama environment variables
     export OLLAMA_GPU_LAYERS=999  # Use all GPU layers
     export OLLAMA_GPU=1
+    export OLLAMA_LLM_LIBRARY=cuda_v12  # Force CUDA
+    echo "🚀 GPU acceleration enabled for model: $MODEL_NAME"
     echo "✓ Ollama configured for GPU acceleration"
   else
-    echo "⚠ No NVIDIA GPU detected or nvidia-smi not available"
-    echo "  Running in CPU-only mode"
-    export OLLAMA_GPU=0
-    export OLLAMA_GPU_LAYERS=0
+    echo "✗ FATAL: No GPU available"
+    echo "✗ This deployment requires GPU acceleration" 
+    echo "✗ Check your GPU allocation and container runtime"
+    exit 1
   fi
   
-  # Check for CUDA availability
+  # Check for CUDA availability (but don't fail if missing in cloud environments)
   if [ -d "/usr/local/cuda" ] || [ -n "$CUDA_HOME" ]; then
     echo "✓ CUDA installation detected"
   else
-    echo "⚠ CUDA not found - GPU acceleration may not work"
+    echo "⚠ CUDA not found locally - relying on container runtime"
   fi
   
   echo "========================"

@@ -447,10 +447,10 @@ export VALIDATION_TIMEOUT=3600  # 1 hour
 # For very large models or slow hardware
 export VALIDATION_TIMEOUT=7200  # 2 hours
 
-#### Example: Running LLaVA 34B
+#### Example: Running LLaVA 34B (GPU Required)
 
 ```bash
-# Docker example with large model
+# Docker example with large model (GPU REQUIRED)
 docker run -d \
   --gpus all \
   --name ollama-llava \
@@ -460,11 +460,34 @@ docker run -d \
   -e PORT=9000 \
   your-image-name
 
+# For cloud deployments (Nosana, etc.)
+# Ensure your deployment has GPU allocation
+# Large models like LLaVA 34B CANNOT run on CPU
+
 # Local example
 export MODEL_NAME=llava:34b-v1.6-q5_K_M
 export VALIDATION_TIMEOUT=3600
 export PORT=9000
 ./start-ollama.sh
+```
+
+#### GPU Requirements
+
+**⚠️ GPU REQUIRED - NO CPU FALLBACK**
+
+This server requires GPU acceleration and will **fail immediately** if no GPU is detected:
+
+1. **GPU allocation is mandatory** for all deployments
+2. **Success logs** should show:
+   ```
+   🚀 GPU acceleration enabled for model: your-model-name
+   ✓ Ollama configured for GPU acceleration
+   ```
+3. **Failure logs** will show:
+   ```
+   ✗ FATAL: No GPU available
+   ✗ This deployment requires GPU acceleration
+   ```
 ```
 
 ## Contributing

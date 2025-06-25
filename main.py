@@ -50,6 +50,8 @@ class OllamaOrchestrator:
         """Detect and configure GPU support"""
         print("=== GPU Detection ===")
         
+        gpu_available = False
+        
         # Check for NVIDIA GPU
         if shutil.which('nvidia-smi'):
             try:
@@ -59,34 +61,38 @@ class OllamaOrchestrator:
                 if result.returncode == 0:
                     print("NVIDIA GPU detected:")
                     print(result.stdout.strip())
-                    
-                    # Set GPU-specific Ollama environment variables
-                    os.environ['OLLAMA_GPU_LAYERS'] = '999'  # Use all GPU layers
-                    os.environ['OLLAMA_GPU'] = '1'
-                    print("✓ Ollama configured for GPU acceleration")
+                    gpu_available = True
                 else:
-                    print("⚠ Could not query GPU details")
-                    self._set_cpu_mode()
+                    print("⚠ Could not query GPU details but nvidia-smi exists")
+                    gpu_available = True  # Try GPU anyway
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 print("⚠ nvidia-smi available but failed to execute")
-                self._set_cpu_mode()
+                gpu_available = True  # Try GPU anyway
         else:
-            print("⚠ No NVIDIA GPU detected or nvidia-smi not available")
-            print("  Running in CPU-only mode")
-            self._set_cpu_mode()
+            print("⚠ No nvidia-smi found")
         
-        # Check for CUDA availability
+        # GPU is mandatory - no CPU fallback
+        if gpu_available:
+            # Set GPU-specific Ollama environment variables
+            os.environ['OLLAMA_GPU_LAYERS'] = '999'  # Use all GPU layers
+            os.environ['OLLAMA_GPU'] = '1'
+            os.environ['OLLAMA_LLM_LIBRARY'] = 'cuda_v12'  # Force CUDA
+            print(f"🚀 GPU acceleration enabled for model: {self.model_name}")
+            print("✓ Ollama configured for GPU acceleration")
+        else:
+            print("✗ FATAL: No GPU available")
+            print("✗ This deployment requires GPU acceleration")
+            print("✗ Check your GPU allocation and container runtime")
+            self.cleanup()
+            sys.exit(1)
+        
+        # Check for CUDA availability (but don't fail if missing in cloud environments)
         if Path("/usr/local/cuda").exists() or os.environ.get('CUDA_HOME'):
             print("✓ CUDA installation detected")
         else:
-            print("⚠ CUDA not found - GPU acceleration may not work")
+            print("⚠ CUDA not found locally - relying on container runtime")
         
         print("========================")
-    
-    def _set_cpu_mode(self):
-        """Configure for CPU-only mode"""
-        os.environ['OLLAMA_GPU'] = '0'
-        os.environ['OLLAMA_GPU_LAYERS'] = '0'
     
     def start_ollama_server(self):
         """Start Ollama server in background"""
@@ -177,12 +183,12 @@ class OllamaOrchestrator:
             # Check for large model indicators
             if any(size in model_lower for size in ['34b', '70b', '65b', '180b']) or \
                any(keyword in model_lower for keyword in ['llava', 'vision']) or \
-               'q4' not in model_lower and 'q5' not in model_lower and 'q8' not in model_lower:
+               ('q4' not in model_lower and 'q5' not in model_lower and 'q8' not in model_lower):
                 validation_timeout = 1800  # 30 minutes for large models
-                print(f"⏳ Detected large model - using extended timeout: {validation_timeout} seconds")
+                print(f"⏳ Large model detected - using extended timeout: {validation_timeout} seconds")
             else:
                 validation_timeout = 600  # 10 minutes for smaller models
-                print(f"⏳ Using standard timeout: {validation_timeout} seconds")
+                print(f"⏳ Standard model - using timeout: {validation_timeout} seconds")
         else:
             print(f"⏳ Using custom timeout: {validation_timeout} seconds")
         

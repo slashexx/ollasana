@@ -1,13 +1,12 @@
-# GPU-Compatible Ollama OpenAI API Server
+# GPU-Only Ollama OpenAI API Server
 # 
+# REQUIRES GPU - No CPU fallback!
+#
 # To run with GPU support:
 #   docker run --gpus all -e MODEL_NAME=llama2 -p 9000:9000 your-image
 #
 # To run with specific GPU:
 #   docker run --gpus '"device=0"' -e MODEL_NAME=llama2 -p 9000:9000 your-image
-#
-# To run CPU-only:
-#   docker run -e MODEL_NAME=llama2 -p 9000:9000 your-image
 #
 # All services are unified and accessible through port 9000
 
@@ -56,11 +55,16 @@ ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 ENV CUDA_VISIBLE_DEVICES=all
 
-# Ollama GPU configuration
+# Ollama GPU configuration - Force GPU usage for large models
 ENV OLLAMA_GPU=1
 ENV OLLAMA_NUM_GPU=-1
 ENV OLLAMA_GPU_MEMORY_FRACTION=0.9
 ENV OLLAMA_MAX_LOADED_MODELS=1
+ENV OLLAMA_LOAD_TIMEOUT=1800
+
+# Force GPU acceleration even if CUDA detection is wonky
+ENV OLLAMA_NOHISTORY=1
+ENV OLLAMA_LLM_LIBRARY=cuda_v12
 
 # Remove HF legacy variables - Ollama uses its own registry
 # ENV HF_HOME, HF_HUB_CACHE, etc. are not needed for Ollama
