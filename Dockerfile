@@ -10,6 +10,9 @@
 #   docker run -e MODEL_NAME=llama2 -p 9000:9000 your-image
 #
 # All services are unified and accessible through port 9000
+# 
+# Note: GPU acceleration works via NVIDIA Container Runtime when using --gpus flag.
+# CUDA doesn't need to be installed inside the container - it's provided by the runtime.
 
 FROM ollama/ollama:latest
 
@@ -22,8 +25,8 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Note: nvidia-smi and GPU drivers will be mounted at runtime by Docker
-# when using --gpus flag. No need to install nvidia-container-toolkit inside container.
+# Note: CUDA toolkit and nvidia-smi are provided by NVIDIA Container Runtime
+# when using --gpus flag. The base ollama/ollama image handles GPU acceleration.
 
 # Install Python dependencies
 RUN pip3 install requests fastapi uvicorn
@@ -60,6 +63,10 @@ ENV OLLAMA_GPU=1
 ENV OLLAMA_NUM_GPU=-1
 ENV OLLAMA_GPU_MEMORY_FRACTION=0.9
 ENV OLLAMA_MAX_LOADED_MODELS=1
+ENV OLLAMA_GPU_LAYERS=999
+
+# Additional GPU runtime environment variables
+ENV NVIDIA_REQUIRE_CUDA="cuda>=11.0"
 
 # Remove HF legacy variables - Ollama uses its own registry
 # ENV HF_HOME, HF_HUB_CACHE, etc. are not needed for Ollama

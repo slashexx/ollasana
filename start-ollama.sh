@@ -42,18 +42,27 @@ detect_gpu() {
     export OLLAMA_GPU_LAYERS=999  # Use all GPU layers
     export OLLAMA_GPU=1
     echo "✓ Ollama configured for GPU acceleration"
+    
+    # In containerized environments, check for GPU runtime availability instead of CUDA installation
+    if [ -n "$NVIDIA_VISIBLE_DEVICES" ] || [ -n "$CUDA_VISIBLE_DEVICES" ]; then
+      echo "✓ NVIDIA Container Runtime detected - GPU acceleration enabled"
+    elif [ -d "/usr/local/cuda" ] || [ -n "$CUDA_HOME" ]; then
+      echo "✓ CUDA installation detected"
+    else
+      echo "ℹ Running in containerized environment - GPU access via NVIDIA Container Runtime"
+    fi
+    
+    # Verify GPU memory is accessible
+    if nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits >/dev/null 2>&1; then
+      local gpu_memory=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -1)
+      echo "✓ GPU memory accessible: ${gpu_memory}MB free"
+    fi
+    
   else
     echo "⚠ No NVIDIA GPU detected or nvidia-smi not available"
     echo "  Running in CPU-only mode"
     export OLLAMA_GPU=0
     export OLLAMA_GPU_LAYERS=0
-  fi
-  
-  # Check for CUDA availability
-  if [ -d "/usr/local/cuda" ] || [ -n "$CUDA_HOME" ]; then
-    echo "✓ CUDA installation detected"
-  else
-    echo "⚠ CUDA not found - GPU acceleration may not work"
   fi
   
   echo "========================"
@@ -125,6 +134,49 @@ validate_model() {
   fi
 }
 
+# Function to validate GPU inference is working
+validate_gpu_inference() {
+  if [ "$OLLAMA_GPU" = "1" ]; then
+    echo "Validating GPU inference..."
+    
+    # Monitor GPU memory before and during inference
+    local gpu_memory_before=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+    echo "GPU memory before test: ${gpu_memory_before}MB"
+    
+    # Run a test inference and monitor GPU usage
+    echo "Running GPU inference test..."
+    local test_response
+    test_response=$(curl -s -X POST http://localhost:$OLLAMA_PORT/api/generate \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"Generate a short creative story about a robot.\",\"stream\":false}" \
+      --max-time 60) &
+    
+    # Wait a moment for inference to start, then check GPU memory
+    sleep 5
+    local gpu_memory_during=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+    echo "GPU memory during inference: ${gpu_memory_during}MB"
+    
+    # Wait for the test to complete
+    wait
+    
+    # Check if GPU memory increased during inference (indicating GPU usage)
+    if [ "$gpu_memory_during" -gt "$gpu_memory_before" ]; then
+      echo "✓ GPU inference validated - memory usage increased by $((gpu_memory_during - gpu_memory_before))MB"
+    else
+      echo "⚠ GPU memory usage didn't increase significantly during inference"
+      echo "  This could indicate CPU fallback, but inference is still working"
+    fi
+    
+    if echo "$test_response" | grep -q "response"; then
+      echo "✓ Inference test completed successfully"
+    else
+      echo "⚠ Inference test response was unexpected"
+    fi
+  else
+    echo "Skipping GPU validation (CPU-only mode)"
+  fi
+}
+
 # Function to start FastAPI server
 start_fastapi_server() {
   echo "Starting FastAPI server..."
@@ -157,6 +209,9 @@ load_ollama_model
 
 # Validate model is working
 validate_model
+
+# Validate GPU inference is working
+validate_gpu_inference
 
 echo "✅ All services started successfully!"
 echo ""
