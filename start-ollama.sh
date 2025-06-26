@@ -88,7 +88,6 @@ start_ollama_server() {
     # Explicit GPU configuration
     export CUDA_VISIBLE_DEVICES=0
     export OLLAMA_GPU_MEMORY_FRACTION=0.9
-    export OLLAMA_GPU_LAYERS=99
     export OLLAMA_NUM_GPU=1
     echo "✓ Ollama configured for GPU usage (safe mode)"
     echo "  GPU Device: ${CUDA_VISIBLE_DEVICES}"
