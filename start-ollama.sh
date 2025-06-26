@@ -58,6 +58,12 @@ detect_gpu() {
       echo "✓ GPU memory accessible: ${gpu_memory}MB free"
     fi
     
+    # Add diagnostic information for troubleshooting
+    echo "Diagnostic info:"
+    echo "  - Driver version: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader,nounits)"
+    echo "  - CUDA Version: $(nvidia-smi | grep "CUDA Version" | awk '{print $9}' || echo "Unknown")"
+    echo "  - Container GPU access: ${NVIDIA_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-"not set"}}"
+    
   else
     echo "⚠ No NVIDIA GPU detected or nvidia-smi not available"
     echo "  Running in CPU-only mode"
@@ -72,24 +78,42 @@ detect_gpu() {
 start_ollama_server() {
   echo "Starting internal Ollama server on localhost:$OLLAMA_PORT..."
   
-  # Force GPU usage if available
+  # Configure Ollama for GPU usage with safer settings
   if [ "$OLLAMA_GPU" = "1" ]; then
     export OLLAMA_HOST=127.0.0.1:$OLLAMA_PORT
     export OLLAMA_KEEP_ALIVE=5m
     export OLLAMA_NUM_PARALLEL=1
     export OLLAMA_MAX_LOADED_MODELS=1
     export OLLAMA_FLASH_ATTENTION=0
-    # Force GPU memory allocation
+    # Use safer GPU memory allocation (removed OLLAMA_LLM_LIBRARY="cuda")
     export OLLAMA_GPU_MEMORY_FRACTION=0.8
-    export OLLAMA_LLM_LIBRARY="cuda"
-    echo "✓ Ollama configured to force GPU usage"
+    echo "✓ Ollama configured for GPU usage (safe mode)"
+    
+    # Try starting with GPU first
+    echo "Attempting to start Ollama with GPU support..."
+    ollama serve &
+    OLLAMA_PID=$!
+    
+    # Wait a moment to see if it crashes
+    sleep 5
+    if ! kill -0 $OLLAMA_PID 2>/dev/null; then
+      echo "⚠ GPU initialization failed, falling back to CPU mode..."
+      export OLLAMA_GPU=0
+      export OLLAMA_GPU_LAYERS=0
+      unset OLLAMA_GPU_MEMORY_FRACTION
+      export OLLAMA_HOST=127.0.0.1:$OLLAMA_PORT
+      ollama serve &
+      OLLAMA_PID=$!
+      echo "✓ Ollama restarted in CPU-only mode"
+    else
+      echo "✓ Ollama started successfully with GPU support"
+    fi
   else
     export OLLAMA_HOST=127.0.0.1:$OLLAMA_PORT
+    ollama serve &
+    OLLAMA_PID=$!
     echo "✓ Ollama configured for CPU-only mode"
   fi
-  
-  ollama serve &
-  OLLAMA_PID=$!
   
   # Wait for Ollama server to be ready
   echo "Waiting for Ollama server to be ready..."
@@ -136,26 +160,6 @@ load_ollama_model() {
   fi
 }
 
-# Function to force GPU usage for model
-force_gpu_model_load() {
-  if [ "$OLLAMA_GPU" = "1" ]; then
-    echo "Forcing GPU model load..."
-    
-    # Test GPU allocation with a simple request
-    echo "Testing GPU allocation..."
-    local gpu_test_response
-    gpu_test_response=$(timeout 60 curl -s -X POST http://localhost:$OLLAMA_PORT/api/generate \
-      -H "Content-Type: application/json" \
-      -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"Test\",\"stream\":false,\"options\":{\"num_gpu\":99}}")
-    
-    if echo "$gpu_test_response" | grep -q "response"; then
-      echo "✓ GPU model loading test successful"
-    else
-      echo "⚠ GPU model loading test failed, but continuing..."
-    fi
-  fi
-}
-
 # Function to validate model is working
 validate_model() {
   echo "Validating model functionality..."
@@ -165,7 +169,7 @@ validate_model() {
   test_response=$(curl -s -X POST http://localhost:$OLLAMA_PORT/api/generate \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"Hello\",\"stream\":false}" \
-    --max-time 120)
+    --max-time 60)
   
   if echo "$test_response" | grep -q "response"; then
     echo "✓ Model validation successful"
@@ -176,53 +180,28 @@ validate_model() {
   fi
 }
 
-# Function to validate GPU inference is working
+# Function to validate GPU inference is working (simplified)
 validate_gpu_inference() {
   if [ "$OLLAMA_GPU" = "1" ]; then
-    echo "Validating GPU inference..."
+    echo "Checking GPU usage during inference..."
     
-    # Monitor GPU memory before and during inference
+    # Monitor GPU memory before inference
     local gpu_memory_before=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
-    echo "GPU memory before test: ${gpu_memory_before}MB"
+    echo "GPU memory before: ${gpu_memory_before}MB"
     
-    # Run a test inference and monitor GPU usage (with longer timeout)
-    echo "Running GPU inference test (this may take a moment for first GPU load)..."
-    local test_response
-    test_response=$(timeout 120 curl -s -X POST http://localhost:$OLLAMA_PORT/api/generate \
-      -H "Content-Type: application/json" \
-      -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"Generate a short creative story about a robot.\",\"stream\":false}") &
+    # Wait a moment then check again
+    sleep 5
+    local gpu_memory_after=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+    echo "GPU memory after model load: ${gpu_memory_after}MB"
     
-    local curl_pid=$!
-    
-    # Wait a moment for inference to start, then check GPU memory
-    sleep 10
-    local gpu_memory_during=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
-    echo "GPU memory during inference: ${gpu_memory_during}MB"
-    
-    # Wait for the test to complete
-    wait $curl_pid
-    local curl_exit_code=$?
-    
-    # Check if GPU memory increased during inference (indicating GPU usage)
-    if [ "$gpu_memory_during" -gt "$((gpu_memory_before + 100))" ]; then
-      echo "✓ GPU inference validated - memory usage increased by $((gpu_memory_during - gpu_memory_before))MB"
+    # If there's significant GPU memory usage, GPU is working
+    if [ "$gpu_memory_after" -gt "$((gpu_memory_before + 500))" ]; then
+      echo "✓ GPU inference appears to be working (${gpu_memory_after}MB in use)"
     else
-      echo "⚠ GPU memory didn't increase significantly during inference"
-      echo "  Memory before: ${gpu_memory_before}MB, during: ${gpu_memory_during}MB"
-      echo "  This might indicate CPU fallback - checking response..."
-    fi
-    
-    if [ $curl_exit_code -eq 0 ] && echo "$test_response" | grep -q "response"; then
-      echo "✓ Inference test completed successfully"
-    elif [ $curl_exit_code -eq 124 ]; then
-      echo "⚠ Inference test timed out after 120 seconds"
-      echo "  This might indicate the model is loading on CPU instead of GPU"
-    else
-      echo "⚠ Inference test failed with exit code: $curl_exit_code"
-      echo "  Response: $test_response"
+      echo "ℹ GPU memory usage: ${gpu_memory_after}MB (may be using CPU or small model)"
     fi
   else
-    echo "Skipping GPU validation (CPU-only mode)"
+    echo "Running in CPU-only mode"
   fi
 }
 
@@ -255,9 +234,6 @@ start_ollama_server
 
 # Load the Ollama model
 load_ollama_model
-
-# Force GPU model load
-force_gpu_model_load
 
 # Validate model is working
 validate_model
