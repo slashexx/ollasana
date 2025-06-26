@@ -85,9 +85,14 @@ start_ollama_server() {
     export OLLAMA_NUM_PARALLEL=1
     export OLLAMA_MAX_LOADED_MODELS=1
     export OLLAMA_FLASH_ATTENTION=0
-    # Use safer GPU memory allocation (removed OLLAMA_LLM_LIBRARY="cuda")
-    export OLLAMA_GPU_MEMORY_FRACTION=0.8
+    # Explicit GPU configuration
+    export CUDA_VISIBLE_DEVICES=0
+    export OLLAMA_GPU_MEMORY_FRACTION=0.9
+    export OLLAMA_GPU_LAYERS=99
+    export OLLAMA_NUM_GPU=1
     echo "✓ Ollama configured for GPU usage (safe mode)"
+    echo "  GPU Device: ${CUDA_VISIBLE_DEVICES}"
+    echo "  GPU Layers: ${OLLAMA_GPU_LAYERS}"
     
     # Try starting with GPU first
     echo "Attempting to start Ollama with GPU support..."
@@ -101,6 +106,7 @@ start_ollama_server() {
       export OLLAMA_GPU=0
       export OLLAMA_GPU_LAYERS=0
       unset OLLAMA_GPU_MEMORY_FRACTION
+      unset CUDA_VISIBLE_DEVICES
       export OLLAMA_HOST=127.0.0.1:$OLLAMA_PORT
       ollama serve &
       OLLAMA_PID=$!
@@ -138,25 +144,34 @@ load_ollama_model() {
   # Check if model is already available locally
   if ollama list | grep -q "^$MODEL_NAME"; then
     echo "✓ Model $MODEL_NAME is already available locally"
-    return 0
-  fi
-  
-  echo "Pulling model $MODEL_NAME from Ollama registry..."
-  echo "This may take several minutes depending on model size..."
-  
-  # For GPU setups, ensure GPU allocation during model pull
-  if [ "$OLLAMA_GPU" = "1" ]; then
-    echo "Configuring GPU memory for model loading..."
-    export CUDA_VISIBLE_DEVICES=0
-  fi
-  
-  if ollama pull "$MODEL_NAME"; then
-    echo "✓ Successfully pulled model: $MODEL_NAME"
   else
-    echo "✗ Failed to pull model: $MODEL_NAME"
-    echo "Please check if the model name is correct."
-    echo "Available models can be found at: https://ollama.ai/library"
-    exit 1
+    echo "Pulling model $MODEL_NAME from Ollama registry..."
+    echo "This may take several minutes depending on model size..."
+    
+    if ollama pull "$MODEL_NAME"; then
+      echo "✓ Successfully pulled model: $MODEL_NAME"
+    else
+      echo "✗ Failed to pull model: $MODEL_NAME"
+      echo "Please check if the model name is correct."
+      echo "Available models can be found at: https://ollama.ai/library"
+      exit 1
+    fi
+  fi
+  
+  # Force GPU loading if available
+  if [ "$OLLAMA_GPU" = "1" ]; then
+    echo "Forcing GPU model load for first inference..."
+    local gpu_load_response
+    gpu_load_response=$(curl -s -X POST http://localhost:$OLLAMA_PORT/api/generate \
+      -H "Content-Type: application/json" \
+      -d "{\"model\":\"$MODEL_NAME\",\"prompt\":\"GPU test\",\"stream\":false,\"options\":{\"num_gpu\":99,\"main_gpu\":0}}" \
+      --max-time 30)
+    
+    if echo "$gpu_load_response" | grep -q "response"; then
+      echo "✓ GPU model loading successful"
+    else
+      echo "⚠ GPU model loading failed, but model is available"
+    fi
   fi
 }
 

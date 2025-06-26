@@ -56,7 +56,7 @@ ENV OLLAMA_HOME=/tmp/ollama_home
 # GPU-specific environment variables
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV CUDA_VISIBLE_DEVICES=all
+ENV CUDA_VISIBLE_DEVICES=0
 
 # Ollama GPU configuration
 ENV OLLAMA_GPU=1
@@ -67,6 +67,7 @@ ENV OLLAMA_GPU_LAYERS=999
 
 # Additional GPU runtime environment variables
 ENV NVIDIA_REQUIRE_CUDA="cuda>=11.0"
+ENV OLLAMA_DEBUG=1
 
 # Remove HF legacy variables - Ollama uses its own registry
 # ENV HF_HOME, HF_HUB_CACHE, etc. are not needed for Ollama
