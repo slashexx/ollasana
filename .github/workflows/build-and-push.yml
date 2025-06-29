@@ -8,7 +8,7 @@ on:
 
 env:
   IMAGE_NAME: oneclickllm
-  IMAGE_TAG: "stabllama"
+  IMAGE_TAG: "ollama01"
 
 jobs:
   build:
